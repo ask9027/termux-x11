@@ -285,6 +285,20 @@ public class LorieView extends SurfaceView implements InputStub {
         enableGboardCJK = enabled;
         mIMM.restartInput(this);
     }
+    public void checkRestartInput(boolean recheck) {
+        if (!enableGboardCJK) return;
+        if (mIMM.getCurrentInputMethodSubtype().getLanguageTag().length() >= 2 && !mIMM.getCurrentInputMethodSubtype().getLanguageTag().substring(0, 2).equals(mImeLang))
+            mIMM.restartInput(this);
+        else if (recheck) { // recheck needed because sometimes requestCursorUpdates() is called too fast, before InputMethodManager detect change in IM subtype
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                CompletableFuture.delayedExecutor(40, TimeUnit.MILLISECONDS).execute(() -> { checkRestartInput(false); });
+            else
+                new Thread(() -> { try {
+                    Thread.sleep(40);
+                    checkRestartInput(false);
+                } catch (Exception e) { System.err.println(e); } }).start();
+        }
+    }
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
         if (enableGboardCJK) {
@@ -295,19 +309,6 @@ public class LorieView extends SurfaceView implements InputStub {
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS |
                     (mImeCJK ? InputType.TYPE_TEXT_VARIATION_NORMAL : InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
             return new BaseInputConnection(this, false) {
-                private void checkRestartInput(boolean recheck) {
-                    if (mIMM.getCurrentInputMethodSubtype().getLanguageTag().length() >= 2 && !mIMM.getCurrentInputMethodSubtype().getLanguageTag().substring(0, 2).equals(mImeLang))
-                        mIMM.restartInput(LorieView.this);
-                    else if (recheck) { // recheck needed because sometimes requestCursorUpdates() is called too fast, before InputMethodManager detect change in IM subtype
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                            CompletableFuture.delayedExecutor(40, TimeUnit.MILLISECONDS).execute(() -> { checkRestartInput(false); });
-                        else
-                            new Thread(() -> { try {
-                                Thread.sleep(40);
-                                checkRestartInput(false);
-                            } catch (Exception e) { System.err.println(e); } }).start();
-                    }
-                }
                 @Override
                 public boolean requestCursorUpdates(int cursorUpdateMode) {
                     // workaround for Gboard
