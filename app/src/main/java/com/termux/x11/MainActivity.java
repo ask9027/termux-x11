@@ -573,6 +573,8 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
             buttons.setVisibility(View.GONE);
         }
 
+        getTerminalToolbarViewPager().setAlpha(((float) p.getInt("opacityEKBar", 100))/100);
+
         lorieView.requestLayout();
         lorieView.invalidate();
     }
