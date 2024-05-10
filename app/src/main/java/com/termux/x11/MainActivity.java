@@ -573,7 +573,9 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
             buttons.setVisibility(View.GONE);
         }
 
-        getTerminalToolbarViewPager().setAlpha(((float) p.getInt("opacityEKBar", 100))/100);
+        View pager = getTerminalToolbarViewPager();
+        frm.setPadding(0, 0, 0, p.getBoolean("adjustHeightForEK", false) && pager.getVisibility() == View.VISIBLE ? pager.getHeight() : 0);
+        pager.setAlpha(((float) p.getInt("opacityEKBar", 100))/100);
 
         lorieView.requestLayout();
         lorieView.invalidate();
@@ -650,6 +652,7 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
                 parent.removeView(pager);
                 parent.addView(pager, 0);
             }
+            frm.setPadding(0, 0, 0, preferences.getBoolean("adjustHeightForEK", false) && show ? pager.getHeight() : 0);
 
             if (enabled && saveState) {
                 SharedPreferences.Editor edit = preferences.edit();
@@ -820,7 +823,6 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, @NonNull Configuration newConfig) {
         toggleExtraKeys(!isInPictureInPictureMode, false);
 
-        frm.setPadding(0, 0, 0, 0);
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
     }
 
