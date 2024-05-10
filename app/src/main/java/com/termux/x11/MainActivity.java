@@ -523,6 +523,7 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
         setTerminalToolbarView();
         onWindowFocusChanged(true);
         LorieView.setClipboardSyncEnabled(p.getBoolean("clipboardEnable", false));
+        lorieView.setWorkaroundGboardCJK(p.getBoolean("enableGboardCJK", false));
 
         lorieView.triggerCallback();
 
@@ -861,6 +862,10 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
 
     private void checkXEvents() {
         getLorieView().handleXEvents();
+        // workaround for enabling CJK keyboard in DeX soft keyboard mode
+        // in that mode InputConnection#requestCursorUpdates() is not called during language switch
+        if (SamsungDexUtils.checkDeXEnabled(this))
+            getLorieView().checkRestartInput(false);
         handler.postDelayed(this::checkXEvents, 300);
     }
 }

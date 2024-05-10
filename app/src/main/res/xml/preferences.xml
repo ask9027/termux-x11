@@ -169,6 +169,12 @@
         <Preference
             android:title="Extra keys config"
             android:key="extra_keys_config" />
+
+        <SwitchPreferenceCompat
+            android:title="Workaround to enable CJK Gboard"
+            android:summary="May require Android 14 and Gboard 14"
+            android:defaultValue="false"
+            android:key="enableGboardCJK" />
     </PreferenceCategory>
 
     <PreferenceCategory android:key="other" android:title="Other">
