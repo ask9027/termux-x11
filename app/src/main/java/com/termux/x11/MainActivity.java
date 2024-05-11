@@ -177,13 +177,9 @@ public class MainActivity extends AppCompatActivity implements View.OnApplyWindo
             }
             @Override
             public void swipeUp() {
-                // Gesture for soft touchpad in DeX mode that cannot trigger KEYCODE_BACK easily
-                if (SamsungDexUtils.checkDeXEnabled(getApplicationContext())) {
-                    toggleKeyboardVisibility(MainActivity.this);
-                    Log.d("MainActivity", "Toggling keyboard visibility");
-                    if(inputMethodManager != null) {
-                        inputMethodManager.showSoftInput(lorieView, InputMethodManager.SHOW_FORCED);
-                    }
+                if(inputMethodManager != null) {
+                    // inputMethodManager.showSoftInput() instead of toggleKeyboardVisibility works for DeX mode
+                    inputMethodManager.showSoftInput(lorieView, InputMethodManager.SHOW_FORCED);
                 }
             }
         }, new InputEventSender(lorieView));
