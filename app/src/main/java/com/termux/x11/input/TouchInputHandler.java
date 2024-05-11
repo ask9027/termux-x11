@@ -322,6 +322,11 @@ public class TouchInputHandler {
         mInjector.capturedPointerSpeedFactor = value;
     }
 
+    public void setCapturedTrackpadPointerSpeedFactor(float value) {
+        mInjector.capturedTrackpadPointerSpeedFactor = value;
+    }
+
+
     public void setTransformCapturedPointer(String value) {
         switch (value) {
             case "c":
@@ -417,8 +422,8 @@ public class TouchInputHandler {
                     case CapturedPointerTransformation.UPSIDE_DOWN:
                         distanceX = -distanceX; distanceY = -distanceY; break;
                 }
-                distanceX *= mInjector.capturedPointerSpeedFactor;
-                distanceY *= mInjector.capturedPointerSpeedFactor;
+                distanceX *= mInjector.capturedTrackpadPointerSpeedFactor;
+                distanceY *= mInjector.capturedTrackpadPointerSpeedFactor;
             }
 
 

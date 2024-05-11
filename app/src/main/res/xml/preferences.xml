@@ -106,7 +106,13 @@
         <SeekBarPreference
             android:title="Captured pointer speed factor, %"
             android:key="capturedPointerSpeedFactor"
-            android:max="200"
+            android:max="400"
+            android:defaultValue="100" />
+
+        <SeekBarPreference
+            android:title="Captured Trackpad pointer speed factor, %"
+            android:key="capturedTrackpadPointerSpeedFactor"
+            android:max="400"
             android:defaultValue="100" />
 
         <SwitchPreferenceCompat

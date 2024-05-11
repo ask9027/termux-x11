@@ -141,15 +141,20 @@ public class LoriePreferences extends AppCompatActivity {
                 findPreference("dexMetaKeyCapture").setVisible(false);
             SeekBarPreference scalePreference = findPreference("displayScale");
             SeekBarPreference capturedPointerSpeedFactor = findPreference("capturedPointerSpeedFactor");
+            SeekBarPreference capturedTrackpadPointerSpeedFactor = findPreference("capturedTrackpadPointerSpeedFactor");
             SeekBarPreference opacityEKBar = findPreference("opacityEKBar");
             scalePreference.setMin(30);
             scalePreference.setMax(200);
             scalePreference.setSeekBarIncrement(10);
             scalePreference.setShowSeekBarValue(true);
-            capturedPointerSpeedFactor.setMin(30);
-            capturedPointerSpeedFactor.setMax(200);
+            capturedPointerSpeedFactor.setMin(25);
+            capturedPointerSpeedFactor.setMax(400);
             capturedPointerSpeedFactor.setSeekBarIncrement(1);
             capturedPointerSpeedFactor.setShowSeekBarValue(true);
+            capturedTrackpadPointerSpeedFactor.setMin(25);
+            capturedTrackpadPointerSpeedFactor.setMax(400);
+            capturedTrackpadPointerSpeedFactor.setSeekBarIncrement(1);
+            capturedTrackpadPointerSpeedFactor.setShowSeekBarValue(true);
             opacityEKBar.setMin(10);
             opacityEKBar.setMax(100);
             opacityEKBar.setSeekBarIncrement(1);
@@ -465,6 +470,16 @@ public class LoriePreferences extends AppCompatActivity {
                                     v = 100;
                                 }
                                 edit.putInt("capturedPointerSpeedFactor", Integer.parseInt(newValue));
+                                break;
+                            }
+                            case "capturedTrackpadPointerSpeedFactor": {
+                                int v;
+                                try {
+                                    v = Integer.parseInt(newValue);
+                                } catch (NumberFormatException | PatternSyntaxException ignored) {
+                                    v = 100;
+                                }
+                                edit.putInt("capturedTrackpadPointerSpeedFactor", Integer.parseInt(newValue));
                                 break;
                             }
                             case "displayDensity": {
