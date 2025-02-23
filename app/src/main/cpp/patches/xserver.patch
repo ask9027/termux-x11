@@ -328,4 +328,3 @@ index f9b7b06d9..f4b2aeddc 100644
 +                screen_priv->info->after_flip(vblank->crtc, vblank->event_id, ust, vblank->target_msc, vblank->pixmap);
                  return;
              }
- 
