@@ -70,8 +70,9 @@ static jclass FindMethodOrDie(JNIEnv *env, jclass clazz, const char* name, const
     return method;
 }
 
-static void requestConnection(__unused JNIEnv *env, __unused jclass clazz) {
+static jboolean requestConnection(__unused JNIEnv *env, __unused jclass clazz) {
 #define check(cond, fmt, ...) if ((cond)) do { __android_log_print(ANDROID_LOG_ERROR, "requestConnection", fmt, ## __VA_ARGS__); goto end; } while (0)
+    bool sent = JNI_FALSE;
     // We do not want to block GUI thread for a long time so we will set timeout to 20 msec.
     struct sockaddr_in server = { .sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr.s_addr = inet_addr("127.0.0.1") };
     int so_error, sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -88,15 +89,18 @@ static void requestConnection(__unused JNIEnv *env, __unused jclass clazz) {
         check(r < 0, "poll failed: %s", strerror(errno));
         socklen_t len = sizeof(so_error);
         check(getsockopt(sock, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0, "getsockopt failed: %s", strerror(errno));
+        if (so_error == ECONNREFUSED) goto end; // Regular situation which happens often if server is not started. No need to spam logcat with this.
         check(so_error != 0, "Connection failed: %s", strerror(so_error));
 
         check(write(sock, MAGIC, sizeof(MAGIC)) < 0, "failed to send message: %s", strerror(errno));
+        sent = JNI_TRUE;
         goto end;
     }
 
     check(1, "something went wrong: %s, %s", strerror(errno), strerror(r));
 
     end: if (sock >= 0) close(sock);
+    return sent;
 #undef errorReturn
 }
 
@@ -136,10 +140,8 @@ static int xcallback(int fd, int events, __unused void* data) {
         ALooper_removeFd(ALooper_forThread(), fd);
         close(conn_fd);
         conn_fd = -1;
-#if RENDERER_IN_ACTIVITY
-        renderer_set_shared_state(NULL);
-        renderer_set_buffer(NULL);
-#endif
+        rendererSetSharedState(NULL);
+        rendererRemoveAllBuffers();
         log(DEBUG, "disconnected");
         return 1;
     }
@@ -185,26 +187,23 @@ static int xcallback(int fd, int events, __unused void* data) {
                         state = NULL;
                     }
 
-#if RENDERER_IN_ACTIVITY
-                    renderer_set_shared_state(state);
-#else
-                    // Should pass it to renderer thread here, but currently it is not implemented...
-                    munmap(state, sizeof(*state));
-#endif
+                    rendererSetSharedState(state);
 
                     close(stateFd); // Closing file descriptor does not unmmap shared memory fragment.
                     break;
                 }
-                case EVENT_SHARED_ROOT_WINDOW_BUFFER: {
+                case EVENT_ADD_BUFFER: {
                     static LorieBuffer* buffer = NULL;
-                    LorieBuffer_Desc desc = {0};
+                    const LorieBuffer_Desc* desc;
                     LorieBuffer_recvHandleFromUnixSocket(conn_fd, &buffer);
-                    LorieBuffer_describe(buffer, &desc);
-                    log(INFO, "Received shared buffer width %d height %d format %d", desc.width, desc.height, desc.format);
-#if RENDERER_IN_ACTIVITY
-                    renderer_set_buffer(buffer);
-#endif
-                    LorieBuffer_release(buffer);
+                    desc = LorieBuffer_description(buffer);
+                    log(INFO, "Received shared buffer width %d stride %d height %d format %d type %d id %llu", desc->width, desc->stride, desc->height, desc->format, desc->type, desc->id);
+                    rendererAddBuffer(buffer);
+                    break;
+                }
+                case EVENT_REMOVE_BUFFER: {
+                    rendererRemoveBuffer(e.removeBuffer.id);
+                    break;
                 }
                 case EVENT_WINDOW_FOCUS_CHANGED: {
                     (*env)->CallVoidMethod(env, thiz, MainActivity.resetIme);
@@ -224,6 +223,9 @@ static void connect_(__unused JNIEnv* env, __unused jobject cls, jint fd) {
     if (conn_fd != -1) {
         ALooper_removeFd(ALooper_forThread(), conn_fd);
         close(conn_fd);
+        rendererSetSharedState(NULL);
+        rendererRemoveAllBuffers();
+        log(DEBUG, "disconnected");
     }
 
     if ((conn_fd = fd) != -1) {
@@ -232,7 +234,7 @@ static void connect_(__unused JNIEnv* env, __unused jobject cls, jint fd) {
     }
 }
 
-static jboolean connected(JNIEnv* env, jclass clazz) {
+static jboolean connected(__unused JNIEnv* env,__unused jclass clazz) {
     return conn_fd != -1;
 }
 
@@ -372,22 +374,15 @@ static void sendTextEvent(JNIEnv *env, __unused jobject thiz, jbyteArray text) {
     }
 }
 
-static void surfaceChanged(JNIEnv *env, jobject thiz, jobject sfc) {
-#if RENDERER_IN_ACTIVITY
+static void surfaceChanged(JNIEnv *env, __unused jobject thiz, jobject sfc) {
     ANativeWindow* win = sfc ? ANativeWindow_fromSurface(env, sfc) : NULL;
     if (win)
         ANativeWindow_acquire(win);
 
-    renderer_set_window(win);
-#endif
+    rendererSetWindow(win);
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_termux_x11_LorieView_renderingInActivity(JNIEnv *env, jobject thiz) {
-    return RENDERER_IN_ACTIVITY;
-}
-
-JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+JNIEXPORT jint JNI_OnLoad(JavaVM *vm, __unused void *reserved) {
     JNIEnv* env;
     static JNINativeMethod methods[] = {
             {"nativeInit", "()V", (void *)&nativeInit},
@@ -405,15 +400,13 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
             {"requestStylusEnabled", "(Z)V", (void *)&requestStylusEnabled},
             {"sendKeyEvent", "(IIZI)Z", (void *)&sendKeyEvent},
             {"sendTextEvent", "([B)V", (void *)&sendTextEvent},
-            {"requestConnection", "()V", (void *)&requestConnection},
+            {"requestConnection", "()Z", (void *)&requestConnection},
     };
     (*vm)->AttachCurrentThread(vm, &env, NULL);
     jclass cls = (*env)->FindClass(env, "com/termux/x11/LorieView");
     (*env)->RegisterNatives(env, cls, methods, sizeof(methods)/sizeof(methods[0]));
 
-#if RENDERER_IN_ACTIVITY
-    renderer_init(env);
-#endif
+    rendererInit(env);
 
     return JNI_VERSION_1_6;
 }

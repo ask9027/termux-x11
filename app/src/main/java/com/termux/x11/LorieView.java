@@ -331,7 +331,7 @@ class InputConnectionWrapper implements InputConnection {
 @SuppressWarnings("deprecation")
 public class LorieView extends SurfaceView implements InputStub {
     public interface Callback {
-        void changed(Surface sfc, int surfaceWidth, int surfaceHeight, int screenWidth, int screenHeight);
+        void changed(int surfaceWidth, int surfaceHeight, int screenWidth, int screenHeight);
     }
 
     interface PixelFormat {
@@ -558,6 +558,7 @@ public class LorieView extends SurfaceView implements InputStub {
         }
 
         @Override public void surfaceChanged(@NonNull SurfaceHolder holder, int f, int width, int height) {
+            LorieView.this.surfaceChanged(holder.getSurface());
             width = getMeasuredWidth();
             height = getMeasuredHeight();
 
@@ -567,14 +568,13 @@ public class LorieView extends SurfaceView implements InputStub {
 
             getDimensionsFromSettings();
             if (mCallback != null)
-                mCallback.changed(holder.getSurface(), width, height, p.x, p.y);
-            LorieView.this.surfaceChanged(holder.getSurface());
+                mCallback.changed(width, height, p.x, p.y);
         }
 
         @Override public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+            LorieView.this.surfaceChanged(null);
             if (mCallback != null)
-                mCallback.changed(holder.getSurface(), 0, 0, 0, 0);
-            LorieView.this.surfaceChanged(holder.getSurface());
+                mCallback.changed(0, 0, 0, 0);
         }
     };
 
@@ -592,15 +592,6 @@ public class LorieView extends SurfaceView implements InputStub {
 
     public void setCallback(Callback callback) {
         mCallback = callback;
-        triggerCallback();
-    }
-
-    public void regenerate() {
-        Callback callback = mCallback;
-        mCallback = null;
-        getHolder().setFormat(android.graphics.PixelFormat.RGBA_8888);
-        mCallback = callback;
-
         triggerCallback();
     }
 
@@ -691,10 +682,6 @@ public class LorieView extends SurfaceView implements InputStub {
 
         getHolder().setFixedSize(p.x, p.y);
         setMeasuredDimension(width, height);
-
-        // In the case if old fixed surface size equals new fixed surface size windowChanged will not be called.
-        // We should force it.
-        regenerate();
     }
 
     @Override
@@ -800,8 +787,6 @@ public class LorieView extends SurfaceView implements InputStub {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus)
-            regenerate();
 
         requestFocus();
 
@@ -845,7 +830,6 @@ public class LorieView extends SurfaceView implements InputStub {
             mIMM.restartInput(this);
     }
 
-    static native boolean renderingInActivity();
     @FastNative private native void nativeInit();
     @FastNative private native void surfaceChanged(Surface surface);
     @FastNative static native void connect(int fd);
@@ -866,7 +850,7 @@ public class LorieView extends SurfaceView implements InputStub {
     }
     @FastNative public native boolean sendKeyEvent(int scanCode, int keyCode, boolean keyDown, int a);
     @FastNative public native void sendTextEvent(byte[] text);
-    @CriticalNative public static native void requestConnection();
+    @CriticalNative public static native boolean requestConnection();
 
     static {
         System.loadLibrary("Xlorie");

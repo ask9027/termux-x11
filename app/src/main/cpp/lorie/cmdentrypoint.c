@@ -22,6 +22,7 @@
 #include <randrstr.h>
 #include <linux/in.h>
 #include <arpa/inet.h>
+#include <poll.h>
 #include "lorie.h"
 
 #define log(prio, ...) __android_log_print(ANDROID_LOG_ ## prio, "LorieNative", __VA_ARGS__)
@@ -37,8 +38,9 @@ void lorieKeysymKeyboardEvent(KeySym keysym, int down);
 char *xtrans_unix_path_x11 = NULL;
 char *xtrans_unix_dir_x11 = NULL;
 
+struct xorg_list registeredBuffers;
+
 static void* startServer(__unused void* cookie) {
-    lorieSetVM((JavaVM*) cookie);
     char* envp[] = { NULL };
     exit(dix_main(argc, (char**) argv, envp));
 }
@@ -48,7 +50,6 @@ static Bool detectTracer(void)
     FILE *fp;
     char  line[256];
     int pid = 0;
-    Bool detected = FALSE;
 
     fp = fopen("/proc/self/status", "r");
     if (!fp)
@@ -198,15 +199,9 @@ Java_com_termux_x11_CmdEntryPoint_start(JNIEnv *env, __unused jclass cls, jobjec
     // Trigger it first time
     AChoreographer_postFrameCallback(choreographer, (AChoreographer_frameCallback) lorieChoreographerFrameCallback, choreographer);
 
+    xorg_list_init(&registeredBuffers);
     pthread_create(&t, NULL, startServer, vm);
     return JNI_TRUE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_termux_x11_CmdEntryPoint_windowChanged(JNIEnv *env, __unused jobject cls, jobject surface) {
-#if !RENDERER_IN_ACTIVITY
-    renderer_set_window(env, surface ? (*env)->NewGlobalRef(env, surface) : NULL);
-#endif
 }
 
 static Bool sendConfigureNotify(__unused ClientPtr pClient, void *closure) {
@@ -230,17 +225,53 @@ static Bool handleClipboardData(__unused ClientPtr pClient, void *closure) {
     return TRUE;
 }
 
+static Bool handleTouchEvent(__unused ClientPtr pClient, void *closure) {
+    ValuatorMask mask;
+    lorieEvent *e = closure;
+    double x = max(min((float) e->touch.x, pScreenPtr->width), 0);
+    double y = max(min((float) e->touch.y, pScreenPtr->height), 0);
+    valuator_mask_zero(&mask);
+    DDXTouchPointInfoPtr touch = TouchFindByDDXID(lorieTouch, e->touch.id, FALSE);
+
+    // Avoid duplicating events
+    if (touch && touch->active) {
+        double oldx = 0, oldy = 0;
+        if (e->touch.type == XI_TouchUpdate &&
+            valuator_mask_fetch_double(touch->valuators, 0, &oldx) &&
+            valuator_mask_fetch_double(touch->valuators, 1, &oldy) &&
+            oldx == x && oldy == y)
+            goto end;
+    }
+
+    // Sometimes activity part does not send XI_TouchBegin and sends only XI_TouchUpdate.
+    if (e->touch.type == XI_TouchUpdate && (!touch || !touch->active))
+        e->touch.type = XI_TouchBegin;
+
+    if (e->touch.type == XI_TouchEnd && (!touch || !touch->active))
+        goto end;
+
+    valuator_mask_set_double(&mask, 0, x * 0xFFFF / (float) pScreenPtr->width);
+    valuator_mask_set_double(&mask, 1, y * 0xFFFF / (float) pScreenPtr->height);
+    QueueTouchEvents(lorieTouch, e->touch.type, e->touch.id, 0, &mask);
+
+    end:
+    free(e);
+    return TRUE;
+}
+
 void handleLorieEvents(int fd, __unused int ready, __unused void *ignored) {
-    DrawablePtr screenDrawable = &pScreenPtr->GetScreenPixmap(pScreenPtr)->drawable;
     ValuatorMask mask;
     lorieEvent e = {0};
     valuator_mask_zero(&mask);
 
     if (ready & X_NOTIFY_ERROR) {
+        LorieBuffer* buf;
         InputThreadUnregisterDev(fd);
         close(fd);
         conn_fd = -1;
         lorieEnableClipboardSync(FALSE);
+        while ((buf = LorieBufferList_first(&registeredBuffers)))
+            LorieBuffer_removeFromList(buf);
         return;
     }
 
@@ -254,34 +285,14 @@ void handleLorieEvents(int fd, __unused int ready, __unused void *ignored) {
                 if (copy->screenSize.name_size)
                     read(fd, copy->screenSize.name, copy->screenSize.name_size);
                 QueueWorkProc(sendConfigureNotify, NULL, copy);
-                lorieTriggerWorkingQueue();
+                lorieWakeServer();
                 break;
             }
             case EVENT_TOUCH: {
-                double x = max(min((float) e.touch.x, screenDrawable->width), 0);
-                double y = max(min((float) e.touch.y, screenDrawable->height), 0);
-                DDXTouchPointInfoPtr touch = TouchFindByDDXID(lorieTouch, e.touch.id, FALSE);
-
-                // Avoid duplicating events
-                if (touch && touch->active) {
-                    double oldx = 0, oldy = 0;
-                    if (e.touch.type == XI_TouchUpdate &&
-                        valuator_mask_fetch_double(touch->valuators, 0, &oldx) &&
-                        valuator_mask_fetch_double(touch->valuators, 1, &oldy) &&
-                        oldx == x && oldy == y)
-                        break;
-                }
-
-                // Sometimes activity part does not send XI_TouchBegin and sends only XI_TouchUpdate.
-                if (e.touch.type == XI_TouchUpdate && (!touch || !touch->active))
-                    e.touch.type = XI_TouchBegin;
-
-                if (e.touch.type == XI_TouchEnd && (!touch || !touch->active))
-                    break;
-
-                valuator_mask_set_double(&mask, 0, x * 0xFFFF / (float) screenDrawable->width);
-                valuator_mask_set_double(&mask, 1, y * 0xFFFF / (float) screenDrawable->height);
-                QueueTouchEvents(lorieTouch, e.touch.type, e.touch.id, 0, &mask);
+                lorieEvent *copy = calloc(1, sizeof(lorieEvent));
+                memcpy(copy, &e, sizeof(e));
+                QueueWorkProc(handleTouchEvent, NULL, copy);
+                lorieWakeServer();
                 break;
             }
             case EVENT_STYLUS: {
@@ -295,8 +306,8 @@ void handleLorieEvents(int fd, __unused int ready, __unused void *ignored) {
                 __android_log_print(ANDROID_LOG_DEBUG, "LorieNative", "got stylus event %f %f %d %d %d %d %s\n", e.stylus.x, e.stylus.y, e.stylus.pressure, e.stylus.tilt_x, e.stylus.tilt_y, e.stylus.orientation,
                                     device == lorieMouse ? "lorieMouse" : (device == loriePen ? "loriePen" : "lorieEraser"));
 
-                valuator_mask_set_double(&mask, 0, max(min(e.stylus.x, screenDrawable->width), 0));
-                valuator_mask_set_double(&mask, 1, max(min(e.stylus.y, screenDrawable->height), 0));
+                valuator_mask_set_double(&mask, 0, max(min(e.stylus.x, pScreenPtr->width), 0));
+                valuator_mask_set_double(&mask, 1, max(min(e.stylus.y, pScreenPtr->height), 0));
                 if (device != lorieMouse) {
                     valuator_mask_set_double(&mask, 2, e.stylus.pressure);
                     valuator_mask_set_double(&mask, 3, e.stylus.tilt_x);
@@ -335,8 +346,8 @@ void handleLorieEvents(int fd, __unused int ready, __unused void *ignored) {
                     case 0: // BUTTON_UNDEFINED
                         flags = (e.mouse.relative) ? POINTER_RELATIVE | POINTER_ACCELERATE : POINTER_ABSOLUTE | POINTER_SCREEN | POINTER_NORAW;
                         if (!e.mouse.relative) {
-                            e.mouse.x = max(0, min(e.mouse.x, screenDrawable->width));
-                            e.mouse.y = max(0, min(e.mouse.y, screenDrawable->height));
+                            e.mouse.x = max(0, min(e.mouse.x, pScreenPtr->width));
+                            e.mouse.y = max(0, min(e.mouse.y, pScreenPtr->height));
                         }
                         valuator_mask_set_double(&mask, 0, (double) e.mouse.x);
                         valuator_mask_set_double(&mask, 1, (double) e.mouse.y);
@@ -377,14 +388,14 @@ void handleLorieEvents(int fd, __unused int ready, __unused void *ignored) {
                 break;
             case EVENT_CLIPBOARD_ANNOUNCE:
                 QueueWorkProc(handleClipboardAnnounce, NULL, NULL);
-                lorieTriggerWorkingQueue();
+                lorieWakeServer();
                 break;
             case EVENT_CLIPBOARD_SEND: {
                 char *data = calloc(1, e.clipboardSend.count + 1);
                 read(conn_fd, data, e.clipboardSend.count);
                 data[e.clipboardSend.count] = 0;
                 QueueWorkProc(handleClipboardData, NULL, data);
-                lorieTriggerWorkingQueue();
+                lorieWakeServer();
             }
         }
 
@@ -411,7 +422,12 @@ void lorieRequestClipboard(void) {
 }
 
 bool lorieConnectionAlive(void) {
-    return conn_fd != -1;
+    if (conn_fd == -1)
+        return false;
+
+    // Check if socket is closed or has errors.
+    struct pollfd p = { .fd = conn_fd, .events = POLLIN | POLLHUP | POLLERR | POLLRDHUP };
+    return !(poll(&p, 1, 0) == 1 && (p.revents & (POLLERR | POLLNVAL | POLLRDHUP | POLLHUP)));
 }
 
 static Bool addFd(__unused ClientPtr pClient, void *closure) {
@@ -429,11 +445,30 @@ void lorieSendSharedServerState(int memfd) {
     }
 }
 
-void lorieSendRootWindowBuffer(LorieBuffer* buffer) {
+void lorieRegisterBuffer(LorieBuffer* buffer) {
+    unsigned long id = LorieBuffer_description(buffer)->id;
+    if (conn_fd == -1 || LorieBufferList_findById(&registeredBuffers, id))
+        return; // Already registered
+
     if (conn_fd != -1 && buffer) {
-        lorieEvent e = { .type = EVENT_SHARED_ROOT_WINDOW_BUFFER };
+        lorieEvent e = { .type = EVENT_ADD_BUFFER };
         write(conn_fd, &e, sizeof(e));
         LorieBuffer_sendHandleToUnixSocket(buffer, conn_fd);
+        LorieBuffer_addToList(buffer, &registeredBuffers);
+        const LorieBuffer_Desc* desc = LorieBuffer_description(buffer);
+        log(INFO, "Sent shared buffer width %d stride %d height %d format %d type %d id %llu", desc->width, desc->stride, desc->height, desc->format, desc->type, desc->id);
+    }
+}
+
+void lorieUnregisterBuffer(LorieBuffer* buffer) {
+    unsigned long id;
+    if (!buffer || (!LorieBufferList_findById(&registeredBuffers, (id = LorieBuffer_description(buffer)->id))))
+        return;  // Not exist or not registered so no need to unregister
+
+    if (conn_fd != -1 && buffer) {
+        lorieEvent e = { .removeBuffer = { .t = EVENT_REMOVE_BUFFER, .id = id } };
+        write(conn_fd, &e, sizeof(e));
+        LorieBuffer_removeFromList(buffer);
     }
 }
 
@@ -451,7 +486,7 @@ Java_com_termux_x11_CmdEntryPoint_getXConnection(JNIEnv *env, __unused jobject c
     jmethodID adoptFd = (*env)->GetStaticMethodID(env, ParcelFileDescriptorClass, "adoptFd", "(I)Landroid/os/ParcelFileDescriptor;");
     socketpair(AF_UNIX, SOCK_STREAM, 0, client);
     QueueWorkProc(addFd, NULL, (void*) (int64_t) client[1]);
-    lorieTriggerWorkingQueue();
+    lorieWakeServer();
 
     return (*env)->CallStaticObjectMethod(env, ParcelFileDescriptorClass, adoptFd, client[0]);
 }
