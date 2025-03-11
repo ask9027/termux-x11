@@ -802,8 +802,6 @@ Bool loriePresentFlip(__unused RRCrtcPtr crtc, __unused uint64_t event_id, __unu
     if (desc->type != LORIEBUFFER_FD && desc->type != LORIEBUFFER_AHARDWAREBUFFER)
         return FALSE;
 
-    dprintf(2, "flip! pixmap %dx%d screen %dx%d\n", pixmap->drawable.width, pixmap->drawable.height, pvfb->root.width, pvfb->root.height);
-
     lorieRegisterBuffer(priv->buffer);
     return TRUE;
 }
@@ -870,8 +868,8 @@ void lorieExaDestroyPixmap(__unused ScreenPtr pScreen, void *driverPriv) {
     if (priv->buffer) {
         if (priv->locked)
             LorieBuffer_unlock(priv->buffer);
-        LorieBuffer_release(priv->buffer);
         lorieUnregisterBuffer(priv->buffer);
+        LorieBuffer_release(priv->buffer);
     }
     free(priv);
 }
