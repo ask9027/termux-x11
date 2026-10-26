@@ -152,7 +152,13 @@ static jlong nativeInit(JNIEnv *env, jobject thiz) {
         MainActivity.resetIme = FindMethodOrDie(env, env->GetObjectClass(thiz), "resetIme", "()V", JNI_FALSE);
     }
 
-    return (jlong) (intptr_t) new (malloc(sizeof(LorieViewResources))) LorieViewResources(env, thiz);
+    void* storage = malloc(sizeof(LorieViewResources));
+    if (!storage) {
+        log(ERROR, "Failed to allocate LorieViewResources");
+        return 0;
+    }
+
+    return (jlong) (intptr_t) new (storage) LorieViewResources(env, thiz);
 }
 
 LorieViewResources::LorieViewResources(JNIEnv *callerEnv, jobject view) {
