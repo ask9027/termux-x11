@@ -344,7 +344,12 @@ public class TouchInputHandler {
                 || (event.getSource() & InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE)
             return mHMListener.onTouch(view, event);
 
-        if (event.getToolType(event.getActionIndex()) == MotionEvent.TOOL_TYPE_FINGER) {
+        // Some Android touchscreens report TOOL_TYPE_UNKNOWN even though the event source
+        // is SOURCE_TOUCHSCREEN. Do not drop those events: Direct Touch must forward the
+        // touchscreen stream based on its source, not solely on the tool classification.
+        boolean isTouchscreenEvent =
+                (event.getSource() & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN;
+        if (event.getToolType(event.getActionIndex()) == MotionEvent.TOOL_TYPE_FINGER || isTouchscreenEvent) {
             // Dex touchpad (in non-captured mode) sends events as finger, but it should be considered as a mouse.
             if (isDexEvent(event) && mDexListener.onTouch(view, event))
                 return true;
