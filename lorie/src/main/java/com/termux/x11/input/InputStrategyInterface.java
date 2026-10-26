@@ -151,17 +151,17 @@ public interface InputStrategyInterface {
                 case MotionEvent.ACTION_MOVE:
                     if (!mSinglePointer || event.getPointerCount() != 1)
                         break;
-                    float x = event.getX(0);
-                    float y = event.getY(0);
-                    if (mHeldButton == InputStub.BUTTON_UNDEFINED
-                            && !mDragStarted
-                            && Math.hypot(x - mDownX, y - mDownY) > mTouchSlop) {
-                        moveCursorToScreenPoint(mDownX, mDownY);
-                        sendButtonEvent(InputStub.BUTTON_LEFT, true);
-                        mHeldButton = InputStub.BUTTON_LEFT;
-                        mDragStarted = true;
+
+                    // Android may batch several touchscreen samples into one MotionEvent.
+                    // Replay those samples in chronological order so fast finger movement does
+                    // not skip intermediate positions on the remote desktop. This is confined
+                    // to Direct Touch; Trackpad and Simulated Touch retain their own behavior.
+                    for (int history = 0; history < event.getHistorySize(); history++) {
+                        handleDirectTouchMove(
+                                event.getHistoricalX(0, history),
+                                event.getHistoricalY(0, history));
                     }
-                    moveCursorToScreenPoint(x, y);
+                    handleDirectTouchMove(event.getX(0), event.getY(0));
                     break;
 
                 case MotionEvent.ACTION_UP:
@@ -180,6 +180,23 @@ public interface InputStrategyInterface {
                 default:
                     break;
             }
+        }
+
+        /**
+         * Applies one Direct Touch motion sample. Once the finger crosses touch slop, the
+         * gesture becomes a left-button drag from the original down point. If a long-press
+         * already owns a button, movement continues that gesture instead of starting a left drag.
+         */
+        private void handleDirectTouchMove(float x, float y) {
+            if (mHeldButton == InputStub.BUTTON_UNDEFINED
+                    && !mDragStarted
+                    && Math.hypot(x - mDownX, y - mDownY) > mTouchSlop) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                sendButtonEvent(InputStub.BUTTON_LEFT, true);
+                mHeldButton = InputStub.BUTTON_LEFT;
+                mDragStarted = true;
+            }
+            moveCursorToScreenPoint(x, y);
         }
 
         private void moveCursorToScreenPoint(float screenX, float screenY) {
