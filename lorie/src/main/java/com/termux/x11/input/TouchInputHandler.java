@@ -422,6 +422,11 @@ public class TouchInputHandler {
     }
 
     public void setInputMode(@InputMode int inputMode) {
+        // A mode switch can happen while a direct-touch drag is active. Release its
+        // button before detaching the strategy so the remote desktop cannot keep it held.
+        if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy)
+            ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy).cancel();
+
         if (mTouchpadHandler == null)
             mInputStrategy = new InputStrategyInterface.TrackpadInputStrategy(mInjector);
         else if (inputMode == InputMode.TOUCH)
