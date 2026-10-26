@@ -423,7 +423,7 @@ public class TouchInputHandler {
         if (mTouchpadHandler == null)
             mInputStrategy = new InputStrategyInterface.TrackpadInputStrategy(mInjector);
         else if (inputMode == InputMode.TOUCH)
-            mInputStrategy = new InputStrategyInterface.NullInputStrategy();
+            mInputStrategy = new InputStrategyInterface.DirectTouchInputStrategy(mRenderData, mInjector, mActivity);
         else if (inputMode == InputMode.SIMULATED_TOUCH)
             mInputStrategy = new InputStrategyInterface.SimulatedTouchInputStrategy(mRenderData, mInjector, mActivity);
         else
@@ -609,7 +609,7 @@ public class TouchInputHandler {
 
     /** Moves the cursor to the specified position on the screen. */
     private void moveCursorToScreenPoint(float screenX, float screenY) {
-        if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy || mInputStrategy instanceof InputStrategyInterface.SimulatedTouchInputStrategy) {
+        if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy || mInputStrategy instanceof InputStrategyInterface.SimulatedTouchInputStrategy || mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
             mRenderData.mapScreenPoint(screenX, screenY, mappedPoint);
             if (mRenderData.setCursorPosition(mappedPoint[0], mappedPoint[1]))
                 mInjector.sendCursorMove((int) mappedPoint[0], (int) mappedPoint[1], false);
@@ -879,7 +879,8 @@ public class TouchInputHandler {
         /** Called when a long-press is triggered for one or more fingers. */
         @Override
         public void onLongPress(int pointerCount, float x, float y) {
-            int button = mouseButtonFromPointerCount(pointerCount);
+            int button = mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy
+                    ? InputStub.BUTTON_RIGHT : mouseButtonFromPointerCount(pointerCount);
             if (button == InputStub.BUTTON_UNDEFINED) {
                 return;
             }
