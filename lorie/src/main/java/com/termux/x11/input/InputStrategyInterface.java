@@ -132,6 +132,9 @@ public interface InputStrategyInterface {
 
         @Override
         public void onMotionEvent(MotionEvent event) {
+            // Gesture recognition and movement are handled by TouchInputHandler's
+            // GestureDetector. Keep raw events here only for pointer lifecycle and
+            // guaranteed button release; GestureDetector itself consumes MotionEvents.
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     releaseHeldButton();
@@ -146,22 +149,6 @@ public interface InputStrategyInterface {
                     mSinglePointer = false;
                     if (mHeldButton == InputStub.BUTTON_LEFT)
                         releaseHeldButton();
-                    break;
-
-                case MotionEvent.ACTION_MOVE:
-                    if (!mSinglePointer || event.getPointerCount() != 1)
-                        break;
-
-                    // Android may batch several touchscreen samples into one MotionEvent.
-                    // Replay those samples in chronological order so fast finger movement does
-                    // not skip intermediate positions on the remote desktop. This is confined
-                    // to Direct Touch; Trackpad and Simulated Touch retain their own behavior.
-                    for (int history = 0; history < event.getHistorySize(); history++) {
-                        handleDirectTouchMove(
-                                event.getHistoricalX(0, history),
-                                event.getHistoricalY(0, history));
-                    }
-                    handleDirectTouchMove(event.getX(0), event.getY(0));
                     break;
 
                 case MotionEvent.ACTION_UP:
@@ -180,6 +167,25 @@ public interface InputStrategyInterface {
                 default:
                     break;
             }
+        }
+
+        /**
+         * Called by GestureDetector's onScroll callback for Direct Touch only.
+         * GestureDetector decides when movement exceeds Android's touch slop; this
+         * method translates the recognized scroll into a remote cursor drag.
+         */
+        public void onGestureScroll(MotionEvent start, MotionEvent current) {
+            if (!mSinglePointer || start == null || current == null
+                    || current.getPointerCount() != 1)
+                return;
+
+            // Preserve intermediate coordinates when Android batches motion samples.
+            for (int history = 0; history < current.getHistorySize(); history++) {
+                handleDirectTouchMove(
+                        current.getHistoricalX(0, history),
+                        current.getHistoricalY(0, history));
+            }
+            handleDirectTouchMove(current.getX(0), current.getY(0));
         }
 
         /**
