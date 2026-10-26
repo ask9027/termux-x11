@@ -721,6 +721,14 @@ public class TouchInputHandler {
             if (pointerCount != 1 || mSuppressCursorMovement)
                 return false;
 
+            // Direct Touch drag recognition is driven by GestureDetector's onScroll,
+            // not by a parallel ACTION_MOVE state machine in the input strategy.
+            if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
+                ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy)
+                        .onGestureScroll(e1, e2);
+                return true;
+            }
+
             if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy) {
                 if (mInjector.scaleTouchpad) {
                     distanceX *= mRenderData.scale.x;
