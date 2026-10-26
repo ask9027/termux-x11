@@ -894,11 +894,20 @@ public class TouchInputHandler {
         /** Called when a long-press is triggered for one or more fingers. */
         @Override
         public void onLongPress(int pointerCount, float x, float y) {
-            int button = mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy
-                    ? InputStub.BUTTON_RIGHT : mouseButtonFromPointerCount(pointerCount);
-            if (button == InputStub.BUTTON_UNDEFINED) {
+            if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
+                // In Direct Touch, defer the right-button decision until finger-up or movement:
+                // stationary release becomes a right click; movement beyond touch slop becomes a drag.
+                if (pointerCount != 1 || screenPointLiesOutsideImageBoundary(x, y))
+                    return;
+                moveCursorToScreenPoint(x, y);
+                ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy)
+                        .onLongPressCandidate();
                 return;
             }
+
+            int button = mouseButtonFromPointerCount(pointerCount);
+            if (button == InputStub.BUTTON_UNDEFINED)
+                return;
 
             if (!(mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy)) {
                 if (screenPointLiesOutsideImageBoundary(x, y))
