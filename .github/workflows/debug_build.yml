@@ -15,6 +15,11 @@ on:
       - '**.md'
       - 'img/**'
 
+# Keep only the newest build for a pull request; stale builds waste runner time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # Builds and artifact uploads do not need repository write access.
 # Grant write access only to the Dependabot merge job below.
 permissions:
