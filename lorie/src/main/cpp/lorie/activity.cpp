@@ -152,7 +152,13 @@ static jlong nativeInit(JNIEnv *env, jobject thiz) {
         MainActivity.resetIme = FindMethodOrDie(env, env->GetObjectClass(thiz), "resetIme", "()V", JNI_FALSE);
     }
 
-    return (jlong) (intptr_t) new (malloc(sizeof(LorieViewResources))) LorieViewResources(env, thiz);
+    void* storage = malloc(sizeof(LorieViewResources));
+    if (!storage) {
+        log(ERROR, "Failed to allocate LorieViewResources");
+        return 0;
+    }
+
+    return (jlong) (intptr_t) new (storage) LorieViewResources(env, thiz);
 }
 
 LorieViewResources::LorieViewResources(JNIEnv *callerEnv, jobject view) {
@@ -225,9 +231,22 @@ int LorieViewResources::xcallback(int fd, int events) {
                         log(ERROR, "Could not allocate clipboard buffer");
                         return xcallback(fd, ALOOPER_EVENT_HANGUP);
                     }
-                    read(connFd, clipboard, e.clipboardSend.count);
+                    size_t bytesRead = 0;
+                    while (bytesRead < e.clipboardSend.count) {
+                        ssize_t n = read(connFd, clipboard + bytesRead, e.clipboardSend.count - bytesRead);
+                        if (n < 0 && errno == EINTR)
+                            continue;
+                        if (n <= 0) {
+                            log(ERROR, "Incomplete clipboard payload: expected %u bytes, received %zu",
+                                e.clipboardSend.count, bytesRead);
+                            free(clipboard);
+                            return xcallback(fd, ALOOPER_EVENT_HANGUP);
+                        }
+                        bytesRead += (size_t) n;
+                    }
                     clipboard[e.clipboardSend.count] = 0;
-                    log(DEBUG, "Clipboard content (%zu symbols) is %s", strlen(clipboard), clipboard);
+                    // Clipboard data can contain passwords or other private text; never log its contents.
+                    log(DEBUG, "Received clipboard text (%zu bytes)", strlen(clipboard));
                     jmethodID id = env->GetMethodID(env->GetObjectClass(thiz), "setClipboardText","(Ljava/lang/String;)V");
                     jobject bb = env->NewDirectByteBuffer(clipboard, strlen(clipboard));
                     jobject charset = env->CallStaticObjectMethod(Charset.self, Charset.forName, env->NewStringUTF("UTF-8"));

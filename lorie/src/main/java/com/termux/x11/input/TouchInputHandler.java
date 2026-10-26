@@ -344,7 +344,12 @@ public class TouchInputHandler {
                 || (event.getSource() & InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE)
             return mHMListener.onTouch(view, event);
 
-        if (event.getToolType(event.getActionIndex()) == MotionEvent.TOOL_TYPE_FINGER) {
+        // Some Android touchscreens report TOOL_TYPE_UNKNOWN even though the event source
+        // is SOURCE_TOUCHSCREEN. Do not drop those events: Direct Touch must forward the
+        // touchscreen stream based on its source, not solely on the tool classification.
+        boolean isTouchscreenEvent =
+                (event.getSource() & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN;
+        if (event.getToolType(event.getActionIndex()) == MotionEvent.TOOL_TYPE_FINGER || isTouchscreenEvent) {
             // Dex touchpad (in non-captured mode) sends events as finger, but it should be considered as a mouse.
             if (isDexEvent(event) && mDexListener.onTouch(view, event))
                 return true;
@@ -360,9 +365,11 @@ public class TouchInputHandler {
             // Avoid short-circuit logic evaluation - ensure all gesture detectors see all events so
             // that they generate correct notifications.
             mScroller.onTouchEvent(event);
-            // Direct touch mode forwards raw touch events to the X11 client; pinch-zoom would
-            // fight over the same two fingers, so leave zooming to the extra-keys bar there.
-            if (!(mInputStrategy instanceof InputStrategyInterface.NullInputStrategy))
+            // Direct Touch and Simulated Touch are mouse-oriented modes. Do not let a
+            // two-finger gesture also resize the local viewport while it is being interpreted
+            // as remote input.
+            if (!(mInputStrategy instanceof InputStrategyInterface.NullInputStrategy)
+                    && !(mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy))
                 mZoomer.onTouchEvent(event);
             mTapDetector.onTouchEvent(event);
             mSwipePinchDetector.onTouchEvent(event);
@@ -415,10 +422,15 @@ public class TouchInputHandler {
     }
 
     public void setInputMode(@InputMode int inputMode) {
+        // A mode switch can happen while a direct-touch drag is active. Release its
+        // button before detaching the strategy so the remote desktop cannot keep it held.
+        if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy)
+            ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy).cancel();
+
         if (mTouchpadHandler == null)
             mInputStrategy = new InputStrategyInterface.TrackpadInputStrategy(mInjector);
         else if (inputMode == InputMode.TOUCH)
-            mInputStrategy = new InputStrategyInterface.NullInputStrategy();
+            mInputStrategy = new InputStrategyInterface.DirectTouchInputStrategy(mRenderData, mInjector, mActivity);
         else if (inputMode == InputMode.SIMULATED_TOUCH)
             mInputStrategy = new InputStrategyInterface.SimulatedTouchInputStrategy(mRenderData, mInjector, mActivity);
         else
@@ -604,7 +616,7 @@ public class TouchInputHandler {
 
     /** Moves the cursor to the specified position on the screen. */
     private void moveCursorToScreenPoint(float screenX, float screenY) {
-        if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy || mInputStrategy instanceof InputStrategyInterface.SimulatedTouchInputStrategy) {
+        if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy || mInputStrategy instanceof InputStrategyInterface.SimulatedTouchInputStrategy || mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
             mRenderData.mapScreenPoint(screenX, screenY, mappedPoint);
             if (mRenderData.setCursorPosition(mappedPoint[0], mappedPoint[1]))
                 mInjector.sendCursorMove((int) mappedPoint[0], (int) mappedPoint[1], false);
@@ -708,6 +720,14 @@ public class TouchInputHandler {
 
             if (pointerCount != 1 || mSuppressCursorMovement)
                 return false;
+
+            // Direct Touch drag recognition is driven by GestureDetector's onScroll,
+            // not by a parallel ACTION_MOVE state machine in the input strategy.
+            if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
+                ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy)
+                        .onGestureScroll(e1, e2);
+                return true;
+            }
 
             if (mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy) {
                 if (mInjector.scaleTouchpad) {
@@ -874,10 +894,20 @@ public class TouchInputHandler {
         /** Called when a long-press is triggered for one or more fingers. */
         @Override
         public void onLongPress(int pointerCount, float x, float y) {
-            int button = mouseButtonFromPointerCount(pointerCount);
-            if (button == InputStub.BUTTON_UNDEFINED) {
+            if (mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy) {
+                // In Direct Touch, defer the right-button decision until finger-up or movement:
+                // stationary release becomes a right click; movement beyond touch slop becomes a drag.
+                if (pointerCount != 1 || screenPointLiesOutsideImageBoundary(x, y))
+                    return;
+                moveCursorToScreenPoint(x, y);
+                ((InputStrategyInterface.DirectTouchInputStrategy) mInputStrategy)
+                        .onLongPressCandidate();
                 return;
             }
+
+            int button = mouseButtonFromPointerCount(pointerCount);
+            if (button == InputStub.BUTTON_UNDEFINED)
+                return;
 
             if (!(mInputStrategy instanceof InputStrategyInterface.TrackpadInputStrategy)) {
                 if (screenPointLiesOutsideImageBoundary(x, y))

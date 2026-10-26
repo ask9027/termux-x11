@@ -55,6 +55,240 @@ public interface InputStrategyInterface {
     }
 
     /**
+     * Direct-touch mode: touchscreen gestures are translated to mouse events rather than
+     * forwarding XI touch events. A tap is handled by the gesture detector; movement beyond
+     * touch slop starts a left-button drag. A long-press becomes a right-click candidate:
+     * lifting without significant movement clicks right, while moving beyond touch slop starts
+     * a right-button drag.
+     */
+    class DirectTouchInputStrategy implements InputStrategyInterface {
+        private final RenderData mRenderData;
+        private final InputEventSender mInjector;
+        private final int mTouchSlop;
+        private final int mDoubleTapSlopSquare;
+        private final long mDoubleTapTimeout;
+        private int mHeldButton = InputStub.BUTTON_UNDEFINED;
+        private float mDownX, mDownY;
+        private boolean mSinglePointer;
+        private boolean mDragStarted;
+        private boolean mRightClickPending;
+        private long mLastTapTime;
+        private PointF mLastTapPoint;
+
+        public DirectTouchInputStrategy(RenderData renderData, InputEventSender injector, Context context) {
+            if (renderData == null || injector == null || context == null)
+                throw new NullPointerException();
+            mRenderData = renderData;
+            mInjector = injector;
+            ViewConfiguration configuration = ViewConfiguration.get(context);
+            mTouchSlop = configuration.getScaledTouchSlop();
+            mDoubleTapTimeout = ViewConfiguration.getDoubleTapTimeout();
+            int doubleTapSlop = (int) (configuration.getScaledDoubleTapSlop() * 0.25f);
+            mDoubleTapSlopSquare = doubleTapSlop * doubleTapSlop;
+        }
+
+        @Override
+        public void onTap(int button) {
+            if (button == InputStub.BUTTON_LEFT) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                PointF currentTap = mRenderData.getCursorPosition();
+                long now = SystemClock.uptimeMillis();
+                if (isDoubleTap(currentTap, now)) {
+                    // Keep both clicks at the same remote pixel so small finger jitter does not
+                    // turn a desktop double-click into two unrelated single clicks.
+                    moveCursorToPoint(mLastTapPoint.x, mLastTapPoint.y);
+                    mLastTapPoint = null;
+                    mLastTapTime = 0;
+                } else {
+                    mLastTapPoint = new PointF(currentTap.x, currentTap.y);
+                    mLastTapTime = now;
+                }
+            } else {
+                mLastTapPoint = null;
+                mLastTapTime = 0;
+            }
+            sendButtonEvent(button, true);
+            sendButtonEvent(button, false);
+        }
+
+        @Override
+        public boolean onPressAndHold(int button, boolean force) {
+            releaseHeldButton();
+            sendButtonEvent(button, true);
+            mHeldButton = button;
+            return true;
+        }
+
+        @Override
+        public void onScroll(float distanceX, float distanceY) {
+            mInjector.sendMouseWheelEvent(distanceX, distanceY);
+        }
+
+        /** Releases any active direct-touch gesture before the strategy is detached. */
+        public void cancel() {
+            releaseHeldButton();
+            mSinglePointer = false;
+            mDragStarted = false;
+            mRightClickPending = false;
+            mLastTapPoint = null;
+            mLastTapTime = 0;
+        }
+
+        @Override
+        public void onMotionEvent(MotionEvent event) {
+            // Gesture recognition and movement are handled by TouchInputHandler's
+            // GestureDetector. Keep raw events here only for pointer lifecycle and
+            // guaranteed button release; GestureDetector itself consumes MotionEvents.
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    releaseHeldButton();
+                    mDownX = event.getX(0);
+                    mDownY = event.getY(0);
+                    mSinglePointer = true;
+                    mDragStarted = false;
+                    mRightClickPending = false;
+                    moveCursorToScreenPoint(mDownX, mDownY);
+                    break;
+
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    mSinglePointer = false;
+                    mRightClickPending = false;
+                    releaseHeldButton();
+                    break;
+
+                case MotionEvent.ACTION_UP:
+                    // A long-press only becomes a right click when the finger lifts without
+                    // crossing touch slop. Anchor the click to the original target to ignore jitter.
+                    if (mRightClickPending && mHeldButton == InputStub.BUTTON_UNDEFINED) {
+                        moveCursorToScreenPoint(mDownX, mDownY);
+                        sendButtonEvent(InputStub.BUTTON_RIGHT, true);
+                        sendButtonEvent(InputStub.BUTTON_RIGHT, false);
+                        mLastTapPoint = null;
+                        mLastTapTime = 0;
+                    }
+                    releaseHeldButton();
+                    mSinglePointer = false;
+                    mDragStarted = false;
+                    mRightClickPending = false;
+                    break;
+
+                case MotionEvent.ACTION_CANCEL:
+                    // Cancellation must never synthesize a click.
+                    releaseHeldButton();
+                    mSinglePointer = false;
+                    mDragStarted = false;
+                    mRightClickPending = false;
+                    break;
+
+                case MotionEvent.ACTION_POINTER_UP:
+                    if (mHeldButton != InputStub.BUTTON_UNDEFINED)
+                        releaseHeldButton();
+                    mSinglePointer = false;
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        /**
+         * Marks a single-finger long press as a deferred right-click candidate. No mouse button
+         * is pressed until movement decides this is a right drag, or finger-up decides it is a click.
+         */
+        public void onLongPressCandidate() {
+            if (mSinglePointer && mHeldButton == InputStub.BUTTON_UNDEFINED) {
+                mRightClickPending = true;
+                mDragStarted = false;
+                mLastTapPoint = null;
+                mLastTapTime = 0;
+            }
+        }
+
+        /**
+         * Called by GestureDetector's onScroll callback for Direct Touch only.
+         * GestureDetector decides when movement exceeds Android's touch slop; this
+         * method translates the recognized scroll into a remote cursor drag.
+         */
+        public void onGestureScroll(MotionEvent start, MotionEvent current) {
+            if (!mSinglePointer || start == null || current == null
+                    || current.getPointerCount() != 1)
+                return;
+
+            // Preserve intermediate coordinates when Android batches motion samples.
+            for (int history = 0; history < current.getHistorySize(); history++) {
+                handleDirectTouchMove(
+                        current.getHistoricalX(0, history),
+                        current.getHistoricalY(0, history));
+            }
+            handleDirectTouchMove(current.getX(0), current.getY(0));
+        }
+
+        /**
+         * Applies one Direct Touch motion sample. Before long press, movement beyond touch slop
+         * starts a left drag. After long press, movement beyond the same threshold starts a right
+         * drag. Sub-threshold movement stays pending so a long press can still become a right click.
+         */
+        private void handleDirectTouchMove(float x, float y) {
+            boolean beyondTouchSlop = Math.hypot(x - mDownX, y - mDownY) > mTouchSlop;
+            if (mRightClickPending && mHeldButton == InputStub.BUTTON_UNDEFINED
+                    && beyondTouchSlop) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                sendButtonEvent(InputStub.BUTTON_RIGHT, true);
+                mHeldButton = InputStub.BUTTON_RIGHT;
+                mRightClickPending = false;
+                mDragStarted = true;
+            } else if (!mRightClickPending
+                    && mHeldButton == InputStub.BUTTON_UNDEFINED
+                    && !mDragStarted && beyondTouchSlop) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                sendButtonEvent(InputStub.BUTTON_LEFT, true);
+                mHeldButton = InputStub.BUTTON_LEFT;
+                mDragStarted = true;
+            }
+            moveCursorToScreenPoint(x, y);
+        }
+
+        private void moveCursorToScreenPoint(float screenX, float screenY) {
+            PointF point = mRenderData.mapScreenPoint(screenX, screenY);
+            moveCursorToPoint(point.x, point.y);
+        }
+
+        private void moveCursorToPoint(float x, float y) {
+            if (mRenderData.setCursorPosition(x, y))
+                mInjector.sendCursorMove((int) x, (int) y, false);
+        }
+
+        private boolean isDoubleTap(PointF currentTap, long now) {
+            if (mLastTapPoint == null || now - mLastTapTime > mDoubleTapTimeout)
+                return false;
+
+            float scaleX = mRenderData.scale.x;
+            float scaleY = mRenderData.scale.y;
+            float dx = (currentTap.x - mLastTapPoint.x) * scaleX;
+            float dy = (currentTap.y - mLastTapPoint.y) * scaleY;
+            return dx * dx + dy * dy <= mDoubleTapSlopSquare;
+        }
+
+        /**
+         * Sends a button event at the current absolute remote cursor position.
+         * InputEventSender.sendMouseDown/Up/Click use a zero coordinate payload;
+         * Direct Touch must keep button transitions tied to the finger's actual target.
+         */
+        private void sendButtonEvent(int button, boolean down) {
+            PointF cursor = mRenderData.getCursorPosition();
+            mInjector.sendMouseEvent(cursor, button, down, false);
+        }
+
+        private void releaseHeldButton() {
+            if (mHeldButton != InputStub.BUTTON_UNDEFINED) {
+                sendButtonEvent(mHeldButton, false);
+                mHeldButton = InputStub.BUTTON_UNDEFINED;
+            }
+        }
+    }
+
+
+    /**
      * This class receives local touch events and translates them into the appropriate mouse based
      * events for the remote host.  The net result is that the local input method feels like a touch
      * interface but the remote host will be given mouse events to inject.

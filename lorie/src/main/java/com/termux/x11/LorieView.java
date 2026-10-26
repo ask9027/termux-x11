@@ -332,10 +332,24 @@ public class LorieView extends SurfaceView implements InputStub {
     }
 
     @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        // A view can be detached and later attached again (for example, when reparented).
+        // onDetachedFromWindow() releases its native renderer resources, so recreate them here.
+        if (mNativeContext == 0) {
+            mNativeContext = nativeInit();
+            if (mNativeContext == 0)
+                Log.e("LorieView", "Failed to recreate native renderer resources after reattach");
+        }
+    }
+
+    @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        nativeDestroy(mNativeContext);
-        mNativeContext = 0;
+        if (mNativeContext != 0) {
+            nativeDestroy(mNativeContext);
+            mNativeContext = 0;
+        }
     }
 
     public void setCallback(Callback callback) {
