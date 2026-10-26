@@ -365,9 +365,11 @@ public class TouchInputHandler {
             // Avoid short-circuit logic evaluation - ensure all gesture detectors see all events so
             // that they generate correct notifications.
             mScroller.onTouchEvent(event);
-            // Direct touch mode forwards raw touch events to the X11 client; pinch-zoom would
-            // fight over the same two fingers, so leave zooming to the extra-keys bar there.
-            if (!(mInputStrategy instanceof InputStrategyInterface.NullInputStrategy))
+            // Direct Touch and Simulated Touch are mouse-oriented modes. Do not let a
+            // two-finger gesture also resize the local viewport while it is being interpreted
+            // as remote input.
+            if (!(mInputStrategy instanceof InputStrategyInterface.NullInputStrategy)
+                    && !(mInputStrategy instanceof InputStrategyInterface.DirectTouchInputStrategy))
                 mZoomer.onTouchEvent(event);
             mTapDetector.onTouchEvent(event);
             mSwipePinchDetector.onTouchEvent(event);
