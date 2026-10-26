@@ -231,12 +231,18 @@ int LorieViewResources::xcallback(int fd, int events) {
                         log(ERROR, "Could not allocate clipboard buffer");
                         return xcallback(fd, ALOOPER_EVENT_HANGUP);
                     }
-                    ssize_t bytesRead = read(connFd, clipboard, e.clipboardSend.count);
-                    if (bytesRead < 0 || (uint32_t) bytesRead != e.clipboardSend.count) {
-                        log(ERROR, "Incomplete clipboard payload: expected %u bytes, received %zd",
-                            e.clipboardSend.count, bytesRead);
-                        free(clipboard);
-                        return xcallback(fd, ALOOPER_EVENT_HANGUP);
+                    size_t bytesRead = 0;
+                    while (bytesRead < e.clipboardSend.count) {
+                        ssize_t n = read(connFd, clipboard + bytesRead, e.clipboardSend.count - bytesRead);
+                        if (n < 0 && errno == EINTR)
+                            continue;
+                        if (n <= 0) {
+                            log(ERROR, "Incomplete clipboard payload: expected %u bytes, received %zu",
+                                e.clipboardSend.count, bytesRead);
+                            free(clipboard);
+                            return xcallback(fd, ALOOPER_EVENT_HANGUP);
+                        }
+                        bytesRead += (size_t) n;
                     }
                     clipboard[e.clipboardSend.count] = 0;
                     // Clipboard data can contain passwords or other private text; never log its contents.
