@@ -78,18 +78,16 @@ public interface InputStrategyInterface {
 
         @Override
         public void onTap(int button) {
-            if (button == InputStub.BUTTON_LEFT) {
+            if (button == InputStub.BUTTON_LEFT)
                 moveCursorToScreenPoint(mDownX, mDownY);
-                mInjector.sendMouseClick(button, false);
-            } else {
-                mInjector.sendMouseClick(button, false);
-            }
+            sendButtonEvent(button, true);
+            sendButtonEvent(button, false);
         }
 
         @Override
         public boolean onPressAndHold(int button, boolean force) {
             releaseHeldButton();
-            mInjector.sendMouseDown(button, false);
+            sendButtonEvent(button, true);
             mHeldButton = button;
             return true;
         }
@@ -126,7 +124,7 @@ public interface InputStrategyInterface {
                             && !mDragStarted
                             && Math.hypot(x - mDownX, y - mDownY) > mTouchSlop) {
                         moveCursorToScreenPoint(mDownX, mDownY);
-                        mInjector.sendMouseDown(InputStub.BUTTON_LEFT, false);
+                        sendButtonEvent(InputStub.BUTTON_LEFT, true);
                         mHeldButton = InputStub.BUTTON_LEFT;
                         mDragStarted = true;
                     }
@@ -157,9 +155,19 @@ public interface InputStrategyInterface {
                 mInjector.sendCursorMove((int) point.x, (int) point.y, false);
         }
 
+        /**
+         * Sends a button event at the current absolute remote cursor position.
+         * InputEventSender.sendMouseDown/Up/Click use a zero coordinate payload;
+         * Direct Touch must keep button transitions tied to the finger's actual target.
+         */
+        private void sendButtonEvent(int button, boolean down) {
+            PointF cursor = mRenderData.getCursorPosition();
+            mInjector.sendMouseEvent(cursor, button, down, false);
+        }
+
         private void releaseHeldButton() {
             if (mHeldButton != InputStub.BUTTON_UNDEFINED) {
-                mInjector.sendMouseUp(mHeldButton, false);
+                sendButtonEvent(mHeldButton, false);
                 mHeldButton = InputStub.BUTTON_UNDEFINED;
             }
         }
