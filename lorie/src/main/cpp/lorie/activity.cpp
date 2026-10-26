@@ -233,7 +233,8 @@ int LorieViewResources::xcallback(int fd, int events) {
                     }
                     read(connFd, clipboard, e.clipboardSend.count);
                     clipboard[e.clipboardSend.count] = 0;
-                    log(DEBUG, "Clipboard content (%zu symbols) is %s", strlen(clipboard), clipboard);
+                    // Clipboard data can contain passwords or other private text; never log its contents.
+                    log(DEBUG, "Received clipboard text (%zu bytes)", strlen(clipboard));
                     jmethodID id = env->GetMethodID(env->GetObjectClass(thiz), "setClipboardText","(Ljava/lang/String;)V");
                     jobject bb = env->NewDirectByteBuffer(clipboard, strlen(clipboard));
                     jobject charset = env->CallStaticObjectMethod(Charset.self, Charset.forName, env->NewStringUTF("UTF-8"));
