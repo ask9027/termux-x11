@@ -57,7 +57,9 @@ public interface InputStrategyInterface {
     /**
      * Direct-touch mode: touchscreen gestures are translated to mouse events rather than
      * forwarding XI touch events. A tap is handled by the gesture detector; movement beyond
-     * touch slop starts a left-button drag, and a long-press may hold the right button.
+     * touch slop starts a left-button drag. A long-press becomes a right-click candidate:
+     * lifting without significant movement clicks right, while moving beyond touch slop starts
+     * a right-button drag.
      */
     class DirectTouchInputStrategy implements InputStrategyInterface {
         private final RenderData mRenderData;
@@ -69,6 +71,7 @@ public interface InputStrategyInterface {
         private float mDownX, mDownY;
         private boolean mSinglePointer;
         private boolean mDragStarted;
+        private boolean mRightClickPending;
         private long mLastTapTime;
         private PointF mLastTapPoint;
 
@@ -126,6 +129,7 @@ public interface InputStrategyInterface {
             releaseHeldButton();
             mSinglePointer = false;
             mDragStarted = false;
+            mRightClickPending = false;
             mLastTapPoint = null;
             mLastTapTime = 0;
         }
@@ -142,20 +146,38 @@ public interface InputStrategyInterface {
                     mDownY = event.getY(0);
                     mSinglePointer = true;
                     mDragStarted = false;
+                    mRightClickPending = false;
                     moveCursorToScreenPoint(mDownX, mDownY);
                     break;
 
                 case MotionEvent.ACTION_POINTER_DOWN:
                     mSinglePointer = false;
-                    if (mHeldButton == InputStub.BUTTON_LEFT)
-                        releaseHeldButton();
+                    mRightClickPending = false;
+                    releaseHeldButton();
                     break;
 
                 case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
+                    // A long-press only becomes a right click when the finger lifts without
+                    // crossing touch slop. Anchor the click to the original target to ignore jitter.
+                    if (mRightClickPending && mHeldButton == InputStub.BUTTON_UNDEFINED) {
+                        moveCursorToScreenPoint(mDownX, mDownY);
+                        sendButtonEvent(InputStub.BUTTON_RIGHT, true);
+                        sendButtonEvent(InputStub.BUTTON_RIGHT, false);
+                        mLastTapPoint = null;
+                        mLastTapTime = 0;
+                    }
                     releaseHeldButton();
                     mSinglePointer = false;
                     mDragStarted = false;
+                    mRightClickPending = false;
+                    break;
+
+                case MotionEvent.ACTION_CANCEL:
+                    // Cancellation must never synthesize a click.
+                    releaseHeldButton();
+                    mSinglePointer = false;
+                    mDragStarted = false;
+                    mRightClickPending = false;
                     break;
 
                 case MotionEvent.ACTION_POINTER_UP:
@@ -166,6 +188,19 @@ public interface InputStrategyInterface {
 
                 default:
                     break;
+            }
+        }
+
+        /**
+         * Marks a single-finger long press as a deferred right-click candidate. No mouse button
+         * is pressed until movement decides this is a right drag, or finger-up decides it is a click.
+         */
+        public void onLongPressCandidate() {
+            if (mSinglePointer && mHeldButton == InputStub.BUTTON_UNDEFINED) {
+                mRightClickPending = true;
+                mDragStarted = false;
+                mLastTapPoint = null;
+                mLastTapTime = 0;
             }
         }
 
@@ -189,14 +224,22 @@ public interface InputStrategyInterface {
         }
 
         /**
-         * Applies one Direct Touch motion sample. Once the finger crosses touch slop, the
-         * gesture becomes a left-button drag from the original down point. If a long-press
-         * already owns a button, movement continues that gesture instead of starting a left drag.
+         * Applies one Direct Touch motion sample. Before long press, movement beyond touch slop
+         * starts a left drag. After long press, movement beyond the same threshold starts a right
+         * drag. Sub-threshold movement stays pending so a long press can still become a right click.
          */
         private void handleDirectTouchMove(float x, float y) {
-            if (mHeldButton == InputStub.BUTTON_UNDEFINED
-                    && !mDragStarted
-                    && Math.hypot(x - mDownX, y - mDownY) > mTouchSlop) {
+            boolean beyondTouchSlop = Math.hypot(x - mDownX, y - mDownY) > mTouchSlop;
+            if (mRightClickPending && mHeldButton == InputStub.BUTTON_UNDEFINED
+                    && beyondTouchSlop) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                sendButtonEvent(InputStub.BUTTON_RIGHT, true);
+                mHeldButton = InputStub.BUTTON_RIGHT;
+                mRightClickPending = false;
+                mDragStarted = true;
+            } else if (!mRightClickPending
+                    && mHeldButton == InputStub.BUTTON_UNDEFINED
+                    && !mDragStarted && beyondTouchSlop) {
                 moveCursorToScreenPoint(mDownX, mDownY);
                 sendButtonEvent(InputStub.BUTTON_LEFT, true);
                 mHeldButton = InputStub.BUTTON_LEFT;
