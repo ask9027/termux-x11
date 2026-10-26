@@ -63,23 +63,47 @@ public interface InputStrategyInterface {
         private final RenderData mRenderData;
         private final InputEventSender mInjector;
         private final int mTouchSlop;
+        private final int mDoubleTapSlopSquare;
+        private final long mDoubleTapTimeout;
         private int mHeldButton = InputStub.BUTTON_UNDEFINED;
         private float mDownX, mDownY;
         private boolean mSinglePointer;
         private boolean mDragStarted;
+        private long mLastTapTime;
+        private PointF mLastTapPoint;
 
         public DirectTouchInputStrategy(RenderData renderData, InputEventSender injector, Context context) {
             if (renderData == null || injector == null || context == null)
                 throw new NullPointerException();
             mRenderData = renderData;
             mInjector = injector;
-            mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+            ViewConfiguration configuration = ViewConfiguration.get(context);
+            mTouchSlop = configuration.getScaledTouchSlop();
+            mDoubleTapTimeout = ViewConfiguration.getDoubleTapTimeout();
+            int doubleTapSlop = (int) (configuration.getScaledDoubleTapSlop() * 0.25f);
+            mDoubleTapSlopSquare = doubleTapSlop * doubleTapSlop;
         }
 
         @Override
         public void onTap(int button) {
-            if (button == InputStub.BUTTON_LEFT)
+            if (button == InputStub.BUTTON_LEFT) {
                 moveCursorToScreenPoint(mDownX, mDownY);
+                PointF currentTap = mRenderData.getCursorPosition();
+                long now = SystemClock.uptimeMillis();
+                if (isDoubleTap(currentTap, now)) {
+                    // Keep both clicks at the same remote pixel so small finger jitter does not
+                    // turn a desktop double-click into two unrelated single clicks.
+                    moveCursorToPoint(mLastTapPoint.x, mLastTapPoint.y);
+                    mLastTapPoint = null;
+                    mLastTapTime = 0;
+                } else {
+                    mLastTapPoint = new PointF(currentTap.x, currentTap.y);
+                    mLastTapTime = now;
+                }
+            } else {
+                mLastTapPoint = null;
+                mLastTapTime = 0;
+            }
             sendButtonEvent(button, true);
             sendButtonEvent(button, false);
         }
@@ -95,6 +119,15 @@ public interface InputStrategyInterface {
         @Override
         public void onScroll(float distanceX, float distanceY) {
             mInjector.sendMouseWheelEvent(distanceX, distanceY);
+        }
+
+        /** Releases any active direct-touch gesture before the strategy is detached. */
+        public void cancel() {
+            releaseHeldButton();
+            mSinglePointer = false;
+            mDragStarted = false;
+            mLastTapPoint = null;
+            mLastTapTime = 0;
         }
 
         @Override
@@ -151,8 +184,23 @@ public interface InputStrategyInterface {
 
         private void moveCursorToScreenPoint(float screenX, float screenY) {
             PointF point = mRenderData.mapScreenPoint(screenX, screenY);
-            if (mRenderData.setCursorPosition(point.x, point.y))
-                mInjector.sendCursorMove((int) point.x, (int) point.y, false);
+            moveCursorToPoint(point.x, point.y);
+        }
+
+        private void moveCursorToPoint(float x, float y) {
+            if (mRenderData.setCursorPosition(x, y))
+                mInjector.sendCursorMove((int) x, (int) y, false);
+        }
+
+        private boolean isDoubleTap(PointF currentTap, long now) {
+            if (mLastTapPoint == null || now - mLastTapTime > mDoubleTapTimeout)
+                return false;
+
+            float scaleX = mRenderData.scale.x;
+            float scaleY = mRenderData.scale.y;
+            float dx = (currentTap.x - mLastTapPoint.x) * scaleX;
+            float dy = (currentTap.y - mLastTapPoint.y) * scaleY;
+            return dx * dx + dy * dy <= mDoubleTapSlopSquare;
         }
 
         /**
