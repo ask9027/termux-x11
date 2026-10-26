@@ -55,6 +55,118 @@ public interface InputStrategyInterface {
     }
 
     /**
+     * Direct-touch mode: touchscreen gestures are translated to mouse events rather than
+     * forwarding XI touch events. A tap is handled by the gesture detector; movement beyond
+     * touch slop starts a left-button drag, and a long-press may hold the right button.
+     */
+    class DirectTouchInputStrategy implements InputStrategyInterface {
+        private final RenderData mRenderData;
+        private final InputEventSender mInjector;
+        private final int mTouchSlop;
+        private int mHeldButton = InputStub.BUTTON_UNDEFINED;
+        private float mDownX, mDownY;
+        private boolean mSinglePointer;
+        private boolean mDragStarted;
+
+        public DirectTouchInputStrategy(RenderData renderData, InputEventSender injector, Context context) {
+            if (renderData == null || injector == null || context == null)
+                throw new NullPointerException();
+            mRenderData = renderData;
+            mInjector = injector;
+            mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        }
+
+        @Override
+        public void onTap(int button) {
+            if (button == InputStub.BUTTON_LEFT) {
+                moveCursorToScreenPoint(mDownX, mDownY);
+                mInjector.sendMouseClick(button, false);
+            } else {
+                mInjector.sendMouseClick(button, false);
+            }
+        }
+
+        @Override
+        public boolean onPressAndHold(int button, boolean force) {
+            releaseHeldButton();
+            mInjector.sendMouseDown(button, false);
+            mHeldButton = button;
+            return true;
+        }
+
+        @Override
+        public void onScroll(float distanceX, float distanceY) {
+            mInjector.sendMouseWheelEvent(distanceX, distanceY);
+        }
+
+        @Override
+        public void onMotionEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    releaseHeldButton();
+                    mDownX = event.getX(0);
+                    mDownY = event.getY(0);
+                    mSinglePointer = true;
+                    mDragStarted = false;
+                    moveCursorToScreenPoint(mDownX, mDownY);
+                    break;
+
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    mSinglePointer = false;
+                    if (mHeldButton == InputStub.BUTTON_LEFT)
+                        releaseHeldButton();
+                    break;
+
+                case MotionEvent.ACTION_MOVE:
+                    if (!mSinglePointer || event.getPointerCount() != 1)
+                        break;
+                    float x = event.getX(0);
+                    float y = event.getY(0);
+                    if (mHeldButton == InputStub.BUTTON_UNDEFINED
+                            && !mDragStarted
+                            && Math.hypot(x - mDownX, y - mDownY) > mTouchSlop) {
+                        moveCursorToScreenPoint(mDownX, mDownY);
+                        mInjector.sendMouseDown(InputStub.BUTTON_LEFT, false);
+                        mHeldButton = InputStub.BUTTON_LEFT;
+                        mDragStarted = true;
+                    }
+                    moveCursorToScreenPoint(x, y);
+                    break;
+
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    releaseHeldButton();
+                    mSinglePointer = false;
+                    mDragStarted = false;
+                    break;
+
+                case MotionEvent.ACTION_POINTER_UP:
+                    if (mHeldButton != InputStub.BUTTON_UNDEFINED)
+                        releaseHeldButton();
+                    mSinglePointer = false;
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        private void moveCursorToScreenPoint(float screenX, float screenY) {
+            PointF point = mRenderData.mapScreenPoint(screenX, screenY);
+            if (mRenderData.setCursorPosition(point.x, point.y))
+                mInjector.sendCursorMove((int) point.x, (int) point.y, false);
+        }
+
+        private void releaseHeldButton() {
+            if (mHeldButton != InputStub.BUTTON_UNDEFINED) {
+                mInjector.sendMouseUp(mHeldButton, false);
+                mHeldButton = InputStub.BUTTON_UNDEFINED;
+            }
+        }
+    }
+
+
+    /**
      * This class receives local touch events and translates them into the appropriate mouse based
      * events for the remote host.  The net result is that the local input method feels like a touch
      * interface but the remote host will be given mouse events to inject.
